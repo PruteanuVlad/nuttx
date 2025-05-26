@@ -80,34 +80,25 @@ int work_queue_period_wq(FAR struct kwork_wqueue_s *wqueue,
                          FAR void *arg, clock_t delay, clock_t period)
 {
   irqstate_t flags;
-  clock_t    expected;
-  bool wake = false;
-  int  ret  = OK;
+  clock_t expected;
+  bool retimer;
 
   if (wqueue == NULL || work == NULL || worker == NULL)
     {
       return -EINVAL;
     }
 
-  /* Ensure the work has been canceled. */
-
-  work_cancel_wq(wqueue, work);
-
-  /* delay+1 is to prevent the insufficient sleep time if we are
-   * currently near the boundary to the next tick.
-   * | current_tick | current_tick + 1 | current_tick + 2 | .... |
-   * |           ^ Here we get the current tick
-   * In this case we delay 1 tick, timer will be triggered at
-   * current_tick + 1, which is not enough for at least 1 tick.
-   */
-
-  expected = clock_systime_ticks() + delay + 1;
+  expected = clock_delay2abstick(delay);
 
   /* Interrupts are disabled so that this logic can be called from with
    * task logic or from interrupt handling logic.
    */
 
   flags = spin_lock_irqsave(&wqueue->lock);
+
+  /* Ensure the work has been removed. */
+
+  retimer = work_available(work) ? false : work_remove(wqueue, work);
 
   /* Initialize the work structure. */
 
@@ -116,32 +107,41 @@ int work_queue_period_wq(FAR struct kwork_wqueue_s *wqueue,
   work->qtime  = expected; /* Expected time */
   work->period = period;   /* Periodical delay */
 
-  /* Insert to the pending list of the wqueue. */
-
   if (delay)
     {
+      /* Insert to the pending list of the wqueue. */
+
       if (work_insert_pending(wqueue, work))
         {
           /* Start the timer if the work is the earliest expired work. */
 
-          ret = wd_start_abstick(&wqueue->timer, work->qtime,
-                                 work_timer_expired, (wdparm_t)wqueue);
+          retimer = false;
+          wd_start_abstick(&wqueue->timer, work->qtime,
+                           work_timer_expired, (wdparm_t)wqueue);
         }
     }
   else
     {
+      /* Insert to the expired list of the wqueue. */
+
       list_add_tail(&wqueue->expired, &work->node);
-      wake = true;
+    }
+
+  if (retimer)
+    {
+      work_timer_reset(wqueue);
     }
 
   spin_unlock_irqrestore(&wqueue->lock, flags);
 
-  if (wake)
+  if (!delay)
     {
+      /* Immediately wake up the worker thread. */
+
       nxsem_post(&wqueue->sem);
     }
 
-  return ret;
+  return 0;
 }
 
 int work_queue_period(int qid, FAR struct work_s *work, worker_t worker,

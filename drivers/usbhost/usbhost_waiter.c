@@ -1,7 +1,5 @@
 /****************************************************************************
- * arch/arm/src/sama5/sam_pgalloc.h
- *
- * SPDX-License-Identifier: Apache-2.0
+ * drivers/usbhost/usbhost_waiter.c
  *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -20,71 +18,88 @@
  *
  ****************************************************************************/
 
-#ifndef __ARCH_ARM_SRC_SAMA5_SAM_PGALLOC_H
-#define __ARCH_ARM_SRC_SAMA5_SAM_PGALLOC_H
-
 /****************************************************************************
  * Included Files
  ****************************************************************************/
 
 #include <nuttx/config.h>
+
 #include <stdint.h>
+#include <stdbool.h>
+#include <debug.h>
+#include <stdio.h>
 
-#include "pgalloc.h"
-
-#ifdef CONFIG_MM_PGALLOC
+#include <nuttx/kthread.h>
+#include <nuttx/usb/usbdev.h>
+#include <nuttx/usb/usbhost.h>
 
 /****************************************************************************
- * Pre-processor Definitions
+ * Private Functions
  ****************************************************************************/
 
 /****************************************************************************
- * Public Data
+ * Name: usbhost_waiter
+ *
+ * Description:
+ *   Wait for USB devices to be connected.
+ *
  ****************************************************************************/
 
-#undef EXTERN
-#if defined(__cplusplus)
-#define EXTERN extern "C"
-extern "C"
+static int usbhost_waiter(int argc, FAR char *argv[])
 {
-#else
-#define EXTERN extern
-#endif
+  FAR struct usbhost_connection_s *conn =
+    (FAR struct usbhost_connection_s *)((uintptr_t)strtoul(argv[1],
+                                                           NULL, 16));
+  FAR struct usbhost_hubport_s *hport;
 
-/****************************************************************************
- * Public Function Prototypes
- ****************************************************************************/
+  uinfo("Running %p\n", conn);
+  for (; ; )
+    {
+      /* Wait for the device to change state */
 
-/****************************************************************************
- * Name: sam_physpgaddr
- *
- * Description:
- *   Check if the virtual address lies in the user data area and, if so
- *   get the mapping to the physical address in the page pool.
- *
- ****************************************************************************/
+      DEBUGVERIFY(CONN_WAIT(conn, &hport));
+      uinfo("%s\n", hport->connected ? "connected" : "disconnected");
 
-#define sam_physpgaddr(vaddr) arm_physpgaddr(vaddr)
+      /* Did we just become connected? */
 
-/****************************************************************************
- * Name: sam_virtpgaddr
- *
- * Description:
- *   Check if the physical address lies in the page pool and, if so
- *   get the mapping to the virtual address in the user data area.
- *
- ****************************************************************************/
+      if (hport->connected)
+        {
+          /* Yes.. enumerate the newly connected device */
 
-#ifdef CONFIG_ARCH_PGPOOL_MAPPING
-#  define sam_virtpgaddr(vaddr) arm_virtpgaddr(vaddr)
-#else
-uintptr_t sam_virtpgaddr(uintptr_t paddr);
-#endif
+          CONN_ENUMERATE(conn, hport);
+        }
+    }
 
-#undef EXTERN
-#ifdef __cplusplus
+  /* Keep the compiler from complaining */
+
+  return 0;
 }
-#endif
 
-#endif /* CONFIG_MM_PGALLOC */
-#endif /* __ARCH_ARM_SRC_SAMA5_SAM_PGALLOC_H */
+/****************************************************************************
+ * Public Functions
+ ****************************************************************************/
+
+/****************************************************************************
+ * Name: usbhost_waiter_initialize
+ *
+ * Description:
+ *   Initialize the USB host waiter. This function will start a thread that
+ *   will monitor for device connection/disconnection events.
+ *
+ ****************************************************************************/
+
+int usbhost_waiter_initialize(FAR struct usbhost_connection_s *conn)
+{
+  FAR char *argv[2];
+  char      arg1[32];
+
+  /* Start a thread to handle device connection. */
+
+  snprintf(arg1, 16, "%p", conn);
+  argv[0] = arg1;
+  argv[1] = NULL;
+  return kthread_create("usbhost",
+                        CONFIG_USBHOST_WAITER_PRIO,
+                        CONFIG_USBHOST_WAITER_STACKSIZE,
+                        usbhost_waiter, argv);
+}

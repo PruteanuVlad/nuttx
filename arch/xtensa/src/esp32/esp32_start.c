@@ -300,12 +300,6 @@ static noreturn_function void __esp32_start(void)
 
   if (chip_rev < 300)
     {
-#ifndef CONFIG_ESP32_IGNORE_CHIP_REVISION_CHECK
-      ets_printf("ERROR: NuttX supports ESP32 chip revision >= v3.0"
-                 " (chip revision is v%" PRId32 ".%01ld)\n",
-                 chip_rev / 100, chip_rev % 100);
-      PANIC();
-#endif
       ets_printf("WARNING: NuttX supports ESP32 chip revision >= v3.0"
                  " (chip is v%" PRId32 ".%01ld).\n"
                  "Ignoring this error and continuing because "

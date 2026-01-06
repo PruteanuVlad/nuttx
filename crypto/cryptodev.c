@@ -142,6 +142,7 @@ static int cryptodevkey_cb(FAR struct cryptkop *);
 static int cryptodev_getkeystatus(FAR struct fcrypt *,
                                   FAR struct crypt_kop *);
 
+static int cryptodev_derive_key(FAR struct file *filep, FAR struct crypt_op *);
 /****************************************************************************
  * Private Data
  ****************************************************************************/
@@ -215,7 +216,6 @@ static int cryptof_ioctl(FAR struct file *filep,
   uint64_t sid;
   uint32_t ses;
   int error = 0;
-
   switch (cmd)
     {
       case CIOCGSESSION:
@@ -262,6 +262,8 @@ static int cryptof_ioctl(FAR struct file *filep,
             case CRYPTO_SHA2_384:
             case CRYPTO_SHA2_512:
             case CRYPTO_CRC32:
+            case CRYPTO_PBKDF2_HMAC_SHA1:
+            case CRYPTO_PBKDF2_HMAC_SHA256:
               thash = true;
               break;
             default:
@@ -270,7 +272,6 @@ static int cryptof_ioctl(FAR struct file *filep,
 
         bzero(&crie, sizeof(crie));
         bzero(&cria, sizeof(cria));
-
         if (txform)
           {
             crie.cri_alg = sop->cipher;
@@ -289,7 +290,6 @@ static int cryptof_ioctl(FAR struct file *filep,
                 crie.cri_next = &cria;
               }
           }
-
         if (thash)
           {
             cria.cri_alg = sop->mac;
@@ -308,7 +308,6 @@ static int cryptof_ioctl(FAR struct file *filep,
                 memcpy(cria.cri_key, sop->mackey, cria.cri_klen / 8);
               }
           }
-
         error = crypto_newsession(&sid, txform ? &crie : &cria,
                                   !cryptodevallowsoft);
 
@@ -316,7 +315,6 @@ static int cryptof_ioctl(FAR struct file *filep,
           {
             goto bail;
           }
-
         cse = csecreate(fcr, sid, crie.cri_key, crie.cri_klen,
               cria.cri_key, cria.cri_klen, sop->cipher, sop->mac, txform,
               thash);
@@ -365,7 +363,6 @@ bail:
           {
             return -EINVAL;
           }
-
         error = cryptodev_op(cse, cop);
         break;
       case CIOCKEY:
@@ -373,6 +370,9 @@ bail:
         break;
       case CIOCKEYRET:
         error = cryptodev_getkeystatus(fcr, (FAR struct crypt_kop *)arg);
+        break;
+      case CIOCDERKEY:
+        error = cryptodev_derive_key(filep, (FAR struct crypt_op *)arg);
         break;
       case CIOCASYMFEAT:
         error = crypto_getfeat((FAR int *)arg);
@@ -394,14 +394,12 @@ static int cryptodev_op(FAR struct csession *cse,
   uint32_t hid;
 
   /* number of requests, not logical and */
-
   crp = crypto_getreq(cse->txform + cse->thash);
   if (crp == NULL)
     {
       error = -ENOMEM;
       goto bail;
     }
-
   if (cse->thash)
     {
       crda = crp->crp_desc;
@@ -420,7 +418,6 @@ static int cryptodev_op(FAR struct csession *cse,
           goto bail;
         }
     }
-
   if (crda)
     {
       crda->crd_skip = 0;
@@ -439,7 +436,6 @@ static int cryptodev_op(FAR struct csession *cse,
           crda->crd_flags &= ~CRD_F_UPDATE;
         }
     }
-
   if (crde)
     {
       if (cop->op == COP_ENCRYPT)
@@ -457,7 +453,6 @@ static int cryptodev_op(FAR struct csession *cse,
       crde->crd_key = cse->key;
       crde->crd_klen = cse->keylen * 8;
     }
-
   crp->crp_ilen = cop->len;
   crp->crp_buf = cop->src;
   crp->crp_sid = cse->sid;
@@ -473,7 +468,6 @@ static int cryptodev_op(FAR struct csession *cse,
 
       crp->crp_iv = cop->iv;
     }
-
   if (cop->dst)
     {
       if (crde == NULL)
@@ -484,7 +478,6 @@ static int cryptodev_op(FAR struct csession *cse,
 
       crp->crp_dst = cop->dst;
     }
-
   if (cop->mac)
     {
       if (crda == NULL)
@@ -495,7 +488,6 @@ static int cryptodev_op(FAR struct csession *cse,
 
       crp->crp_mac = cop->mac;
     }
-
   /* try the fast path first */
 
   crp->crp_flags = CRYPTO_F_IOV | CRYPTO_F_NOQUEUE;
@@ -504,17 +496,14 @@ static int cryptodev_op(FAR struct csession *cse,
     {
       goto dispatch;
     }
-
   if (crypto_drivers[hid].cc_flags & CRYPTOCAP_F_SOFTWARE)
     {
       goto dispatch;
     }
-
   if (crypto_drivers[hid].cc_process == NULL)
     {
       goto dispatch;
     }
-
   error = crypto_drivers[hid].cc_process(crp);
   if (error)
     {
@@ -794,6 +783,104 @@ static int cryptodev_getkeystatus(struct fcrypt *fcr, struct crypt_kop *ret)
 
   kmm_free(krp);
   return OK;
+}
+
+static int cryptodev_derive_key(FAR struct file *filep, FAR struct crypt_op *kop)
+{
+  FAR struct cryptkop *krp = NULL;
+  FAR struct fcrypt *fcr = filep->f_priv;
+  int error = -EINVAL;
+  int in;
+  int out;
+  int size;
+  int i;
+  FAR struct csession *cse;
+  cse = csefind(fcr, kop->ses);
+
+  struct session_op session;
+  struct crypt_op cryp;
+  uint8_t output[kop->targetlen];
+
+  uint8_t U_prev[20];
+  uint8_t U_curr[20];
+  uint8_t T[20];
+  int hlen = 20;
+  int blocks;
+  int dk_offset = 0;
+
+  /* ---------- Create HMAC session ---------- */
+  blocks = (kop->targetlen + hlen - 1) / hlen;
+  memset(&session, 0, sizeof(session));
+  session.cipher = 0;
+  session.mac = CRYPTO_SHA1_HMAC;
+  session.mackey = cse->mackey;
+  session.mackeylen = cse->mackeylen;
+
+  if (cryptof_ioctl(filep, CIOCGSESSION, &session) == -1) {
+      perror("pbkdf2: CIOCGSESSION");
+  }
+  for (int block = 1; block <= blocks; block++) {
+  /* ---------- U1 = HMAC(P, S || INT_32_BE(1)) ---------- */
+
+    uint8_t msg[kop->len + 4];
+    uint32_t counter = htonl(block);
+
+    memcpy(msg, kop->src, kop->len);
+    memcpy(msg + kop->len, &counter, 4);
+
+    memset(&cryp, 0, sizeof(cryp));
+    cryp.ses = session.ses;
+    cryp.op = COP_ENCRYPT;
+    cryp.src = (caddr_t)msg;
+    cryp.len = kop->len + 4;
+    cryp.mac = (caddr_t)U_prev;
+
+    if (cryptof_ioctl(filep, CIOCCRYPT, &cryp) == -1) {
+        perror("pbkdf2: CIOCCRYPT (U1)");
+    }
+
+    memcpy(T, U_prev, hlen);  /* T = U1 */
+
+    /* ---------- U2 .. Uc ---------- */
+
+    for (int iter = 2; iter <= kop->iterations; iter++) {
+
+        memset(&cryp, 0, sizeof(cryp));
+        cryp.ses = session.ses;
+        cryp.op = COP_ENCRYPT;
+        cryp.src = (caddr_t)U_prev;
+        cryp.len = hlen;
+        cryp.mac = (caddr_t)U_curr;
+
+        if (cryptof_ioctl(filep, CIOCCRYPT, &cryp) == -1) {
+            perror("pbkdf2: CIOCCRYPT (iteration)");
+        }
+
+        for (int i = 0; i < hlen; i++) {
+            T[i] ^= U_curr[i];
+        }
+
+        memcpy(U_prev, U_curr, hlen);
+    }
+
+    /* ---------- Final output ---------- */
+
+    int to_copy = (dk_offset + hlen <= kop->targetlen)
+                  ? hlen
+                  : kop->targetlen - dk_offset;
+
+    memcpy(output + dk_offset, T, to_copy);
+    dk_offset += to_copy;
+  }
+
+  if (cryptof_ioctl(filep, CIOCFSESSION, &session.ses) == -1) {
+      perror("pbkdf2: CIOCFSESSION");
+  }
+
+  /* ---------- Print derived key ---------- */
+  memcpy(kop->mac, output, kop->targetlen);
+
+  return 0;
 }
 
 /* ARGSUSED */
@@ -1090,7 +1177,6 @@ static FAR struct csession *csecreate(FAR struct fcrypt *fcr, uint64_t sid,
                                       bool txform, bool thash)
 {
   FAR struct csession *cse;
-
   cse = kmm_malloc(sizeof(struct csession));
   if (cse != NULL)
     {

@@ -257,18 +257,14 @@ int swcr_hash(FAR struct cryptop *crp,
               caddr_t buf)
 {
   FAR const struct auth_hash *axf = sw->sw_axf;
+  printf("we're here\n");
+printf("%c%c\n", axf->name[0], axf->name[1]);
 
-  if (crd->crd_flags & CRD_F_UPDATE)
-    {
+        printf("we're here 2\n");
       return axf->update(&sw->sw_ctx, (FAR uint8_t *)buf + crd->crd_skip,
                          crd->crd_len);
-    }
-  else
-    {
-      axf->final((FAR uint8_t *)crp->crp_mac, &sw->sw_ctx);
-    }
 
-  return 0;
+
 }
 
 /* Apply a combined encryption-authentication transformation */
@@ -867,7 +863,6 @@ int swcr_newsession(FAR uint32_t *sid, FAR struct cryptoini *cri)
 
           case CRYPTO_CHACHA20_POLY1305_MAC:
             axf = &auth_hash_chacha20_poly1305;
-
           auth4common:
             (*swd)->sw_ictx = kmm_malloc(axf->ctxsize);
             if ((*swd)->sw_ictx == NULL)
@@ -881,6 +876,10 @@ int swcr_newsession(FAR uint32_t *sid, FAR struct cryptoini *cri)
                         cri->cri_klen / 8);
             bcopy((*swd)->sw_ictx, &(*swd)->sw_ctx, axf->ctxsize);
             (*swd)->sw_axf = axf;
+            break;
+          case CRYPTO_PBKDF2_HMAC_SHA1:
+            break;
+          case CRYPTO_PBKDF2_HMAC_SHA256:
             break;
 
           case CRYPTO_ESN:
@@ -1124,6 +1123,8 @@ int swcr_process(struct cryptop *crp)
           case CRYPTO_SHA2_384:
           case CRYPTO_SHA2_512:
           case CRYPTO_CRC32:
+          case CRYPTO_PBKDF2_HMAC_SHA1:
+          case CRYPTO_PBKDF2_HMAC_SHA256:
             if ((crp->crp_etype = swcr_hash(crp, crd, sw,
                 crp->crp_buf)) != 0)
               {
@@ -1248,6 +1249,7 @@ int swcr_rsa_verify(struct cryptkop *krp)
 int swcr_kprocess(struct cryptkop *krp)
 {
   /* Sanity check */
+  printf("swcr_kprocess here 1\n");
 
   if (krp == NULL)
     {
@@ -1306,7 +1308,7 @@ void swcr_init(void)
   int kalgs[CRK_ALGORITHM_MAX + 1];
   int flags = CRYPTOCAP_F_SOFTWARE | CRYPTOCAP_F_ENCRYPT_MAC |
               CRYPTOCAP_F_MAC_ENCRYPT;
-
+  printf("I must init, right?\n");
   swcr_id = crypto_get_driverid(flags);
   if (swcr_id < 0)
     {
@@ -1314,7 +1316,7 @@ void swcr_init(void)
 
       PANIC();
     }
-
+  printf("Right????\n");
   algs[CRYPTO_3DES_CBC] = CRYPTO_ALG_FLAG_SUPPORTED;
   algs[CRYPTO_BLF_CBC] = CRYPTO_ALG_FLAG_SUPPORTED;
   algs[CRYPTO_CAST_CBC] = CRYPTO_ALG_FLAG_SUPPORTED;
@@ -1358,5 +1360,7 @@ void swcr_init(void)
   kalgs[CRK_DH_MAKE_PUBLIC] = CRYPTO_ALG_FLAG_SUPPORTED;
   kalgs[CRK_DH_COMPUTE_KEY] = CRYPTO_ALG_FLAG_SUPPORTED;
   kalgs[CRK_RSA_PKCS15_VERIFY] = CRYPTO_ALG_FLAG_SUPPORTED;
+  kalgs[CRK_PBKDF2_HMAC_SHA1] = CRYPTO_ALG_FLAG_SUPPORTED;
+  kalgs[CRK_PBKDF2_HMAC_SHA256] = CRYPTO_ALG_FLAG_SUPPORTED;
   crypto_kregister(swcr_id, kalgs, swcr_kprocess);
 }

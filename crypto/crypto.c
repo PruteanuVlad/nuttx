@@ -87,7 +87,6 @@ int crypto_newsession(FAR uint64_t *sid,
    * XXX We need more smarts here (in real life too, but that's
    * XXX another story altogether).
    */
-
   do
     {
       for (hid = 0; hid < crypto_drivers_num; hid++)
@@ -205,7 +204,6 @@ int crypto_newsession(FAR uint64_t *sid,
     }
 
   /* Call the driver initialization routine. */
-
   lid = hid; /* Pass the driver ID. */
   err = crypto_drivers[hid].cc_newsession(&lid, cri);
   if (err == 0)
@@ -215,7 +213,6 @@ int crypto_newsession(FAR uint64_t *sid,
       *sid |= (lid & 0xffffffff);
       crypto_drivers[hid].cc_sessions++;
     }
-
   nxmutex_unlock(&g_crypto_lock);
   return err;
 }
@@ -277,7 +274,7 @@ int crypto_get_driverid(uint8_t flags)
 {
   FAR struct cryptocap *newdrv;
   int i;
-
+printf("locking crypto_get_driverid\n");
   nxmutex_lock(&g_crypto_lock);
 
   if (crypto_drivers_num == 0)
@@ -356,12 +353,13 @@ int crypto_kregister(uint32_t driverid, FAR int *kalg,
                      CODE int (*kprocess)(FAR struct cryptkop *))
 {
   int i;
-
+  printf("crypto_kregister\n");
   if (driverid >= crypto_drivers_num || kalg  == NULL ||
       crypto_drivers == NULL)
     {
       return -EINVAL;
     }
+printf("locking crypto_kregister\n");
 
   nxmutex_lock(&g_crypto_lock);
 
@@ -390,12 +388,13 @@ int crypto_register(uint32_t driverid, FAR int *alg,
                     CODE int (*process)(FAR struct cryptop *))
 {
   int i;
-
+  printf("registering\n");
   if (driverid >= crypto_drivers_num || alg == NULL ||
       crypto_drivers == NULL)
     {
       return -EINVAL;
     }
+printf("locking crypto_kregister\n");
 
   nxmutex_lock(&g_crypto_lock);
 
@@ -429,6 +428,7 @@ int crypto_unregister(uint32_t driverid, int alg)
 {
   int i = CRYPTO_ALGORITHM_MAX + 1;
   uint32_t ses;
+printf("locking crypto_unregister\n");
 
   nxmutex_lock(&g_crypto_lock);
 
@@ -492,52 +492,60 @@ int crypto_kinvoke(FAR struct cryptkop *krp)
   int error;
 
   /* Sanity checks. */
-
+  printf("crypto_kinvoke here 1\n");
   if (krp == NULL)
     {
       return -EINVAL;
     }
+    printf("crypto_kinvoke here 2\n");
+    printf("locking crypto_kinvoke\n");
 
   nxmutex_lock(&g_crypto_lock);
   for (hid = 0; hid < crypto_drivers_num; hid++)
     {
+      printf("new krp->krp_op %d\n", krp->krp_op);
       if ((crypto_drivers[hid].cc_flags & CRYPTOCAP_F_SOFTWARE) &&
           cryptodevallowsoft == 0)
         {
+          printf("crypto_kinvoke skip 1\n");
           continue;
         }
 
       if (crypto_drivers[hid].cc_kprocess == NULL)
         {
+          printf("crypto_kinvoke skip 2\n");
           continue;
         }
 
       if ((crypto_drivers[hid].cc_kalg[krp->krp_op] &
           CRYPTO_ALG_FLAG_SUPPORTED) == 0)
         {
+          printf("crypto_kinvoke skip 3\n");
           continue;
         }
 
       break;
     }
-
+  printf("crypto_kinvoke here 3\n");
   if (hid == crypto_drivers_num)
     {
       krp->krp_status = -ENODEV;
       nxmutex_unlock(&g_crypto_lock);
       return 0;
     }
-
+    printf("crypto_kinvoke here 4\n");
   krp->krp_hid = hid;
 
   crypto_drivers[hid].cc_koperations++;
 
   error = crypto_drivers[hid].cc_kprocess(krp);
+  printf("crypto_kinvoke here 5\n");
   if (error)
     {
+      printf("crypto_kinvoke here 6\n");
       krp->krp_status = error;
     }
-
+printf("crypto_kinvoke here 7\n");
   nxmutex_unlock(&g_crypto_lock);
   return 0;
 }
@@ -565,28 +573,25 @@ int crypto_invoke(FAR struct cryptop *crp)
       nxmutex_unlock(&g_crypto_lock);
       return 0;
     }
-
   hid = (crp->crp_sid >> 32) & 0xffffffff;
   if (hid >= crypto_drivers_num)
     {
       goto migrate;
     }
-
   if (crypto_drivers[hid].cc_flags & CRYPTOCAP_F_CLEANUP)
     {
       crypto_freesession(crp->crp_sid);
       goto migrate;
     }
-
   if (crypto_drivers[hid].cc_process == NULL)
     {
       goto migrate;
     }
-
   crypto_drivers[hid].cc_operations++;
   crypto_drivers[hid].cc_bytes += crp->crp_ilen;
 
   error = crypto_drivers[hid].cc_process(crp);
+
   if (error)
     {
       if (error == -ERESTART)

@@ -133,8 +133,10 @@
 #define CRYPTO_CRC32            34
 #define CRYPTO_AES_CMAC         35
 #define CRYPTO_AES_128_CMAC     36
-#define CRYPTO_ESN              37 /* Support for Extended Sequence Numbers */
-#define CRYPTO_ALGORITHM_MAX    37 /* Keep updated */
+#define CRYPTO_PBKDF2_HMAC_SHA1 37
+#define CRYPTO_PBKDF2_HMAC_SHA256 38
+#define CRYPTO_ESN              39 /* Support for Extended Sequence Numbers */
+#define CRYPTO_ALGORITHM_MAX    39 /* Keep updated */
 
 /* Algorithm flags */
 
@@ -268,7 +270,9 @@ struct crypt_kop
 #define CRK_ECDSA_SECP256R1_SIGN   7
 #define CRK_ECDSA_SECP256R1_VERIFY 8
 #define CRK_ECDSA_SECP256R1_GENKEY 9
-#define CRK_ALGORITHM_MAX          9 /* Keep updated */
+#define CRK_PBKDF2_HMAC_SHA1       10
+#define CRK_PBKDF2_HMAC_SHA256     11
+#define CRK_ALGORITHM_MAX          12 /* Keep updated */
 
 #define CRF_MOD_EXP                (1 << CRK_MOD_EXP)
 #define CRF_MOD_EXP_CRT            (1 << CRK_MOD_EXP_CRT)
@@ -363,6 +367,8 @@ struct crypt_op
  */
 
   uint16_t flags;
+  uint32_t iterations;
+  unsigned targetlen;
   unsigned len;
   unsigned aadlen;
   caddr_t src, dst;   /* become iov[] inside kernel */
@@ -391,7 +397,8 @@ extern const uint8_t hmac_opad_buffer[HMAC_MAX_BLOCK_LEN];
 #define CIOCCRYPT               103
 #define CIOCKEY                 104
 #define CIOCKEYRET              105
-#define CIOCASYMFEAT            106
+#define CIOCDERKEY              106
+#define CIOCASYMFEAT            107
 
 int crypto_newsession(FAR uint64_t *, FAR struct cryptoini *, int);
 int crypto_freesession(uint64_t);
